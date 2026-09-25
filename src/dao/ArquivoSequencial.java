@@ -63,9 +63,15 @@ public class ArquivoSequencial {
      * CREATE: nunca reaproveita IDs apagados. O novo ID é ultimoId + 1.
      */
     public int create(Carro objeto) throws IOException {
+        return createComPosicao(objeto).id;
+    }
+
+    /** Retorna o endereço da lápide junto ao ID, sem uma busca sequencial posterior. */
+    public InfoRegistro createComPosicao(Carro objeto) throws IOException {
         garantirArquivo();
         try (RandomAccessFile raf = new RandomAccessFile(caminho.toFile(), "rw")) {
             int ultimoId = raf.readInt();
+            if (ultimoId == Integer.MAX_VALUE) throw new IOException("Limite de IDs atingido.");
             int novoId = ultimoId + 1;
             objeto.setId(novoId);
             if (objeto.getCodigo() == null || objeto.getCodigo().isBlank()) {
@@ -76,9 +82,88 @@ public class ArquivoSequencial {
 
             raf.seek(0);
             raf.writeInt(novoId);
-            raf.seek(raf.length());
+            long posicao = raf.length();
+            raf.seek(posicao);
             escreverRegistro(raf, ATIVO, dados);
-            return novoId;
+            return new InfoRegistro(posicao, ATIVO, dados.length, novoId);
+        }
+    }
+
+    /** A posição do índice aponta para a lápide, não para o início do objeto. */
+    public Carro readAtPosition(long posicao, int idEsperado) throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(caminho.toFile(), "r")) {
+            return lerAtivoNaPosicao(raf, posicao, idEsperado);
+        }
+    }
+
+    private static Carro lerAtivoNaPosicao(RandomAccessFile raf, long posicao,
+                                           int idEsperado) throws IOException {
+        if (posicao < TAMANHO_CABECALHO || posicao > raf.length() - 5) {
+            throw new IOException("Posição indexada inválida; reconstrua o índice.");
+        }
+        raf.seek(posicao);
+        RegistroFisico registro = lerRegistroFisico(raf);
+        if (registro.lapide != ATIVO) {
+            throw new IOException("Índice aponta para lápide; reconstrua o índice.");
+        }
+        Carro carro = desserializar(registro.dados);
+        if (carro.getId() != idEsperado) {
+            throw new IOException("ID diverge da posição indexada; reconstrua o índice.");
+        }
+        return carro;
+    }
+
+    /** Atualização direta: preserva o ID e retorna o endereço da versão ativa. */
+    public long updateAtPosition(long posicao, Carro novo) throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(caminho.toFile(), "rw")) {
+            Carro anterior = lerAtivoNaPosicao(raf, posicao, novo.getId());
+            if (novo.getCodigo() == null || novo.getCodigo().isBlank()) {
+                novo.setCodigo(anterior.getCodigo());
+            }
+            byte[] bytes = novo.toByteArray();
+            raf.seek(posicao + 1);
+            int tamanho = raf.readInt();
+            if (tamanho == bytes.length) {
+                raf.write(bytes);
+                return posicao;
+            }
+            long destino = raf.length();
+            raf.seek(destino);
+            escreverRegistro(raf, ATIVO, bytes);
+            raf.seek(posicao);
+            raf.writeByte(EXCLUIDO);
+            return destino;
+        }
+    }
+
+    public void deleteAtPosition(long posicao, int id) throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(caminho.toFile(), "rw")) {
+            lerAtivoNaPosicao(raf, posicao, id);
+            raf.seek(posicao);
+            raf.writeByte(EXCLUIDO);
+        }
+    }
+
+    @FunctionalInterface
+    public interface VisitanteRegistro {
+        void visitar(int id, long posicao) throws IOException;
+    }
+
+    /** Reconstrução em fluxo: um registro por vez, sem materializar a base. */
+    public void percorrerAtivos(VisitanteRegistro visitante) throws IOException {
+        garantirArquivo();
+        try (RandomAccessFile raf = new RandomAccessFile(caminho.toFile(), "r")) {
+            raf.seek(TAMANHO_CABECALHO);
+            while (raf.getFilePointer() < raf.length()) {
+                long posicao = raf.getFilePointer();
+                RegistroFisico registro = lerRegistroFisico(raf);
+                if (registro.lapide != ATIVO && registro.lapide != EXCLUIDO) {
+                    throw new IOException("Lápide inválida na posição " + posicao);
+                }
+                if (registro.lapide == ATIVO) {
+                    visitante.visitar(desserializar(registro.dados).getId(), posicao);
+                }
+            }
         }
     }
 
