@@ -8,5 +8,6 @@ temp/*
 !temp/.gitkeep
 data/dados.db
 data/dados_ordenados.db
+data/index/
 vehicles.csv
 craigslist-carstrucks-data*.zip
