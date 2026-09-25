@@ -2,6 +2,7 @@ import dao.ArquivoSequencial;
 import model.Carro;
 import service.Importador;
 import service.OrdenacaoExterna;
+import service.GerenciadorIndices;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -21,6 +22,8 @@ public class Main {
 
     private final Scanner scanner = new Scanner(System.in);
     private final ArquivoSequencial arquivo = new ArquivoSequencial(DB);
+    private final GerenciadorIndices indices = new GerenciadorIndices(
+            arquivo, Paths.get("data", "index", "arvore_bplus.idx"));
 
     public static void main(String[] args) {
         new Main().executar();
@@ -48,6 +51,7 @@ public class Main {
                     case 6: ordenar(); break;
                     case 7: listar(); break;
                     case 8: arquivo.imprimirEstruturaFisica(System.out); break;
+                    case 9: menuIndices(); break;
                     case 0: System.out.println("Encerrando TP1."); break;
                     default: System.out.println("Opção inválida.");
                 }
@@ -70,6 +74,7 @@ public class Main {
         System.out.println("6 - Ordenação externa");
         System.out.println("7 - Listar registros ativos");
         System.out.println("8 - Visualizar estrutura física do arquivo");
+        System.out.println("9 - Índices / TP2 — Árvore B+");
         System.out.println("0 - Sair");
     }
 
@@ -87,7 +92,8 @@ public class Main {
             }
         }
 
-        Importador.ResultadoImportacao r = new Importador().carregarBase(CSV, DB);
+        Importador.ResultadoImportacao r = indices.executarAlteracaoSequencial(
+                () -> new Importador().carregarBase(CSV, DB));
         System.out.println("Carga concluída. " + r);
     }
 
@@ -98,7 +104,7 @@ public class Main {
         LocalDate data = lerData("Data de registro (AAAA-MM-DD): ");
 
         Carro p = new Carro(0, "", nome, data, caracteristicas, ano);
-        int id = arquivo.create(p);
+        int id = indices.executarAlteracaoSequencial(() -> arquivo.create(p));
         System.out.println("Registro criado com ID " + id + " e código " + p.getCodigo());
     }
 
@@ -127,13 +133,13 @@ public class Main {
         LocalDate data = lerDataOpcional("Data [" + atual.getDataRegistro() + "]: ", atual.getDataRegistro());
 
         Carro novo = new Carro(id, atual.getCodigo(), nome, data, caracteristicas, ano);
-        boolean ok = arquivo.update(novo);
+        boolean ok = indices.executarAlteracaoSequencial(() -> arquivo.update(novo));
         System.out.println(ok ? "Registro atualizado." : "Registro não encontrado.");
     }
 
     private void excluir() throws IOException {
         int id = lerInt("ID a excluir: ", -1);
-        boolean ok = arquivo.delete(id);
+        boolean ok = indices.executarAlteracaoSequencial(() -> arquivo.delete(id));
         System.out.println(ok ? "Registro marcado com lápide de exclusão." :
                 "Registro não encontrado ou já estava apagado.");
     }
@@ -159,10 +165,7 @@ public class Main {
                 : "Tamanho da memória da seleção (>= 1): ";
         int memoria = lerInt(mensagemMemoria, -1);
 
-        OrdenacaoExterna ordenacao = new OrdenacaoExterna();
-        OrdenacaoExterna.ResultadoOrdenacao r = metodo == 1
-                ? ordenacao.ordenar(DB, TEMP, caminhos, memoria)
-                : ordenacao.ordenarComSelecaoPorSubstituicao(DB, TEMP, caminhos, memoria);
+        OrdenacaoExterna.ResultadoOrdenacao r = indices.ordenar(TEMP, caminhos, memoria, metodo == 2);
         System.out.println("Ordenação e compactação concluídas: " + r);
         System.out.println("O arquivo data/dados.db agora é a versão ordenada usada pelo CRUD.");
     }
@@ -175,6 +178,43 @@ public class Main {
         }
         for (Carro p : lista) System.out.println(p);
         System.out.println("Total ativo: " + lista.size());
+    }
+
+    private void menuIndices() throws IOException {
+        int opcao;
+        do {
+            System.out.println("========== ÍNDICES / TP2 — B+ ==========");
+            System.out.println("1 - Criar/reconstruir B+ a partir de dados.db");
+            System.out.println("2 - Buscar ID pela B+ (leitura direta)");
+            System.out.println("3 - Informações da B+");
+            System.out.println("4 - Validar B+ e posições dos dados");
+            System.out.println("5 - Comparar leitura sequencial e B+");
+            System.out.println("0 - Voltar");
+            opcao = lerInt("Escolha: ", -1);
+            switch (opcao) {
+                case 1:
+                    int ordem = lerInt("Ordem m (máximo de filhos; 3 a 4096): ", -1);
+                    long inicio = System.nanoTime();
+                    indices.reconstruir(ordem);
+                    System.out.println("Reconstrução concluída em "
+                            + (System.nanoTime() - inicio) / 1_000_000 + " ms.");
+                    System.out.println(indices.informacoes());
+                    break;
+                case 2:
+                    Carro carro = indices.buscar(lerInt("ID: ", -1));
+                    System.out.println(carro == null ? "Registro não encontrado." : carro);
+                    break;
+                case 3: System.out.println(indices.informacoes()); break;
+                case 4: System.out.println(indices.validar()); break;
+                case 5:
+                    int id = lerInt("ID para comparar: ", -1);
+                    int repeticoes = lerInt("Repetições (1 a 1000): ", -1);
+                    System.out.println(indices.compararBuscas(new int[]{id}, repeticoes));
+                    break;
+                case 0: break;
+                default: System.out.println("Opção inválida.");
+            }
+        } while (opcao != 0);
     }
 
     private int lerInt(String msg, int padrao) {
