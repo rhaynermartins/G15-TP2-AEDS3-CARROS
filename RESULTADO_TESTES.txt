@@ -1,6 +1,10 @@
-Resultados dos testes
+Resultados dos testes — TP1 e TP2
+Execução: 26/09/2026, macOS, JVM local, -Xmx512m.
+Compilação do zero em diretório vazio com javac -Xlint:all: OK.
 
 Base principal: 100.000 registros
+
+TP1
 
 Carga: OK
 Create: OK
@@ -32,6 +36,72 @@ Caminhos: 4
 Limite de memória: 1.000
 Runs iniciais: 100
 Passagens: 4
-Tempo de carga: 3856 ms (3,856 s)
-Tempo de ordenação: 4636 ms (4,636 s)
+Tempo de carga: 5985 ms (5,985 s)
+Tempo de ordenação: 5544 ms (5,544 s)
 Tamanho do arquivo binário após carga: 10.042.038 bytes
+Teste de carga/ordenação 100K executado em cópia isolada, sem alterar a base principal.
+
+TP2 — SUÍTES E FLUXO FINAL
+TesteTP1: OK
+TesteBPlus: OK (incluindo --base-real em cópia isolada)
+TesteHash: OK
+TesteListas: OK
+TesteFase2: OK
+TesteTP2: OK
+TesteTP2 --base-real: OK
+TesteTP2 --reabrir: OK, novo processo, sem reconstrução
+
+B+: OK
+Hash: OK
+Lista Ano: OK
+Lista Características: OK
+Busca combinada: OK
+Create: dados e quatro índices atualizados, sem reutilizar IDs
+Read: B+, Hash, ano, característica e combinação: OK
+Update localizado por B+, Hash e Lista: OK
+Delete localizado por B+, Hash e Lista: OK
+Update mesmo tamanho e com realocação: OK
+Validação global: OK
+Recarga do CSV com reconstrução de índices ativos: OK
+Intercalação Balanceada + quatro índices: OK
+Seleção por Substituição + quatro índices: OK
+Falha parcial, bloqueio persistente e reconstrução: OK
+Seleções antigas e IDs fora dos resultados recusados: OK
+Paginação: no máximo 20 carros lidos por página, sem varredura da base
+Menu interativo: Create, cinco leituras, Update/Delete pelas três estruturas,
+paginação, ID inválido, reconstrução, informações, validação e comparação: OK
+Atalho testar.bat atualizado; suítes executadas diretamente no macOS.
+
+BASE REAL FINAL
+Registros ativos: 100000
+ultimoId: 100001 (registro 100001 ausente)
+B+: ordem 32, altura 4, entradas 100000
+Hash: população inicial 100000, capacidade 5000, profundidade global 5, buckets 32
+Lista Ano: 102 termos, 100000 postings
+Lista Características: 47 termos, 535292 postings
+2020 AND automatic: 2478 resultados, iguais ao oráculo sequencial dos testes
+Amostras: 1, 2, 50000, 99999, 100000 e 100001 ausente
+Base 100K: OK, preservada byte a byte na construção/validação/reabertura
+
+DESEMPENHO — ÚLTIMA EXECUÇÃO DO TESTE TP2 APÓS REABERTURA
+Mesmos seis IDs acima, três repetições: 18 consultas por método.
+Sequencial: 4262953960 ns (4262,953960 ms)
+B+: 1165919 ns (1,165919 ms)
+Hash: 1273294 ns (1,273294 ms)
+Tempos totais, incluindo seek/obtenção do carro nas leituras indexadas.
+Abertura dos índices fora da região cronometrada; ordem de medição fixa.
+Medição local simples, sujeita a cache e ambiente; não é benchmark científico.
+
+TAMANHOS
+B+: 2609191 bytes
+Hash diretório: 320 bytes
+Hash buckets: 1920280 bytes
+Lista Ano: 2003712 bytes
+Lista Características: 10707775 bytes
+
+PRESERVAÇÃO
+Algoritmos e formatos de B+, Hash e Listas: preservados
+Algoritmos TP1, base CSV e documentação das Fases 1/2: preservados
+Vídeo do TP1: preservado byte a byte
+Dados binários, índices, metadados, temporários e classes: não versionados
+Pendente: FASE FINAL VÍDEO
