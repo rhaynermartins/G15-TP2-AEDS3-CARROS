@@ -2,6 +2,7 @@ package service;
 
 import dao.ArquivoSequencial;
 import index.bplus.ArvoreBPlus;
+import index.hash.HashEstendido;
 import model.Carro;
 
 import java.io.DataInputStream;
@@ -14,18 +15,21 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
+import java.util.List;
 
-/** Coordena a B+ com o formato do TP1. Uso por uma aplicação/escritor de cada vez.
+/** Coordena os índices com o formato do TP1. Uso por uma aplicação/escritor de cada vez.
  * O marcador persistente evita usar índices após uma operação interrompida.
  * Não há rollback dos dados: uma falha exige reconstruir a partir da base ativa.
  */
 public class GerenciadorIndices {
     private final ArquivoSequencial dados;
     private final Path indice, marca, assinatura;
+    private final IndicesSecundarios secundarios;
 
     public GerenciadorIndices(ArquivoSequencial dados, Path indice) {
         this.dados = dados;
         this.indice = indice;
+        secundarios = new IndicesSecundarios(dados, indice.toAbsolutePath().getParent());
         marca = indice.resolveSibling(indice.getFileName() + ".pendente");
         assinatura = indice.resolveSibling(indice.getFileName() + ".meta");
         if (dados.getCaminho().toAbsolutePath().normalize().equals(indice.toAbsolutePath().normalize())) {
@@ -34,14 +38,15 @@ public class GerenciadorIndices {
     }
 
     public boolean existe() { return Files.exists(indice); }
-    public boolean ativo() { return existe() || Files.exists(marca); }
+    public boolean ativo() { return existe() || Files.exists(marca) || secundarios.ativo(); }
+    public boolean fase2Ativa() { return secundarios.ativo(); }
 
     public int ordem() throws IOException {
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) { return arvore.getOrdem(); }
     }
 
     private IOException inconsistente() {
-        return new IOException("Índice ausente/desatualizado ou operação interrompida. Reconstrua a B+.");
+        return new IOException("Índice ausente/desatualizado ou operação interrompida. Reconstrua os índices ativos.");
     }
 
     private String estadoDados() throws IOException {
@@ -55,6 +60,7 @@ public class GerenciadorIndices {
         try (DataInputStream in = new DataInputStream(Files.newInputStream(assinatura))) {
             if (!in.readUTF().equals(estadoDados())) throw inconsistente();
         }
+        if (secundarios.ativo()) secundarios.conferirArquivos();
     }
 
     private void marcar(int ordem) throws IOException {
@@ -98,11 +104,45 @@ public class GerenciadorIndices {
                 dados.percorrerAtivos(arvore::inserir);
                 arvore.validar(null);
             }
+            if (secundarios.ativo()) secundarios.reconstruir();
             if (!antes.equals(estadoDados())) throw new IOException("Dados alterados durante reconstrução.");
             substituir(temp, indice);
             concluir();
         } finally { Files.deleteIfExists(temp); }
     }
+
+    /** Ativação explícita: quantidade inicial recebida, nunca inferida de ultimoId/ativos.
+     * Reconstruções seguintes reutilizam fase2.meta e não dependem do CSV.
+     */
+    public void reconstruirTodos(int ordem, long quantidadeInicial) throws IOException {
+        ArvoreBPlus.validarOrdem(ordem);
+        HashEstendido.capacidadePara(quantidadeInicial);
+        marcar(ordem);
+        secundarios.configurar(quantidadeInicial);
+        reconstruir(ordem);
+    }
+
+    public long quantidadeInicial() throws IOException { return secundarios.quantidadeInicial(); }
+
+    private void conferirFase2() throws IOException {
+        conferir();
+        if (!secundarios.ativo()) throw new IOException("Ative os índices da Fase 2 pela reconstrução completa.");
+    }
+
+    public Carro buscarHash(int id) throws IOException { conferirFase2(); return secundarios.buscarHash(id); }
+    public List<Carro> buscarAno(int ano) throws IOException { conferirFase2(); return secundarios.buscar(ano, null); }
+    public List<Carro> buscarCaracteristica(String termo) throws IOException {
+        if (termo == null) throw new IllegalArgumentException("Informe uma característica.");
+        conferirFase2(); return secundarios.buscar(null, termo);
+    }
+    public List<Carro> buscarCombinada(int ano, String termo) throws IOException {
+        if (termo == null) throw new IllegalArgumentException("Informe uma característica.");
+        conferirFase2(); return secundarios.buscar(ano, termo);
+    }
+    public String informacoesHash() throws IOException { conferirFase2(); return secundarios.informacoesHash(); }
+    public String validarHash() throws IOException { conferirFase2(); return secundarios.validarHash(); }
+    public String validarListaAno() throws IOException { conferirFase2(); return secundarios.validarLista(true); }
+    public String validarListaCaracteristicas() throws IOException { conferirFase2(); return secundarios.validarLista(false); }
 
     public Carro buscar(int id) throws IOException {
         conferir();
@@ -118,6 +158,7 @@ public class GerenciadorIndices {
             marcar(arvore.getOrdem());
             ArquivoSequencial.InfoRegistro registro = dados.createComPosicao(carro);
             arvore.inserir(registro.id, registro.posicao);
+            if (secundarios.ativo()) secundarios.inserir(carro, registro.posicao);
         }
         concluir();
         return carro.getId();
@@ -128,10 +169,11 @@ public class GerenciadorIndices {
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             long anterior = arvore.buscar(carro.getId());
             if (anterior == -1) return false;
-            dados.readAtPosition(anterior, carro.getId());
+            Carro antigo = dados.readAtPosition(anterior, carro.getId());
             marcar(arvore.getOrdem());
             long nova = dados.updateAtPosition(anterior, carro);
             if (!arvore.atualizarPosicao(carro.getId(), nova)) throw inconsistente();
+            if (secundarios.ativo()) secundarios.atualizar(antigo, carro, nova);
         }
         concluir();
         return true;
@@ -142,10 +184,11 @@ public class GerenciadorIndices {
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             long posicao = arvore.buscar(id);
             if (posicao == -1) return false;
-            dados.readAtPosition(posicao, id);
+            Carro antigo = dados.readAtPosition(posicao, id);
             marcar(arvore.getOrdem());
             dados.deleteAtPosition(posicao, id);
             if (!arvore.remover(id)) throw inconsistente();
+            if (secundarios.ativo()) secundarios.remover(antigo);
         }
         concluir();
         return true;
@@ -154,7 +197,7 @@ public class GerenciadorIndices {
     @FunctionalInterface
     public interface Operacao<T> { T executar() throws IOException; }
 
-    /** Preserva o CRUD sequencial/carga do menu e recompõe a B+ se estiver ativa.
+    /** Preserva o CRUD sequencial/carga do menu e recompõe todos os índices ativos.
      * Também protege ordenações: o marcador é gravado ANTES de mudar os endereços.
      */
     public <T> T executarAlteracaoSequencial(Operacao<T> operacao) throws IOException {
@@ -203,8 +246,10 @@ public class GerenciadorIndices {
             throw new IllegalArgumentException("Informe IDs e de 1 a 1000 repetições.");
         }
         conferir();
-        long sequencial = 0, indexado = 0;
-        try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
+        long sequencial = 0, indexado = 0, hashing = 0;
+        boolean temHash = secundarios.ativo();
+        try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice);
+             HashEstendido hash = temHash ? secundarios.abrirHash() : null) {
             for (int r = 0; r < repeticoes; r++) {
                 for (int id : ids) {
                     long inicio = System.nanoTime();
@@ -215,10 +260,18 @@ public class GerenciadorIndices {
                     Carro b = pos == -1 ? null : dados.readAtPosition(pos, id);
                     indexado += System.nanoTime() - inicio;
                     if (a == null ? b != null : !a.equals(b)) throw inconsistente();
+                    if (hash != null) {
+                        inicio = System.nanoTime();
+                        long posHash = hash.buscar(id);
+                        Carro c = posHash == -1 ? null : dados.readAtPosition(posHash, id);
+                        hashing += System.nanoTime() - inicio;
+                        if (a == null ? c != null : !a.equals(c)) throw inconsistente();
+                    }
                 }
             }
         }
         return "IDs=" + Arrays.toString(ids) + "; consultas=" + (long) ids.length * repeticoes
-                + "; sequencial_ns=" + sequencial + "; bplus_ns=" + indexado;
+                + "; sequencial_ns=" + sequencial + "; bplus_ns=" + indexado
+                + (temHash ? "; hash_ns=" + hashing : "");
     }
 }
