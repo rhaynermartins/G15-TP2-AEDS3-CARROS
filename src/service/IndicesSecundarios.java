@@ -171,7 +171,7 @@ final class IndicesSecundarios {
         }
     }
 
-    List<Carro> buscar(Integer ano, String caracteristica) throws IOException {
+    List<ListaInvertida.Posting> postings(Integer ano, String caracteristica) throws IOException {
         if (ano == null && caracteristica == null) throw new IllegalArgumentException("Informe pelo menos um filtro.");
         String termo = caracteristica == null ? null : ListaInvertida.normalizar(caracteristica);
         List<ListaInvertida.Posting> postings;
@@ -182,15 +182,31 @@ final class IndicesSecundarios {
         } else {
             try (ListaInvertida lista = abrirLista(ano != null)) { postings = lista.buscar(ano != null ? ano : termo); }
         }
-        List<Carro> resultado = new ArrayList<>();
-        for (ListaInvertida.Posting posting : postings) {
-            Carro carro = dados.readAtPosition(posting.posicao, posting.id);
-            if ((ano != null && carro.getAno() != ano) || (termo != null && !termos(carro).contains(termo))) {
-                throw new IOException("Posting incompatível com os dados; reconstrua os índices.");
-            }
-            resultado.add(carro);
+        return postings;
+    }
+
+    Carro lerPosting(ListaInvertida.Posting posting, Integer ano, String caracteristica) throws IOException {
+        Carro carro = dados.readAtPosition(posting.posicao, posting.id);
+        if ((ano != null && carro.getAno() != ano)
+                || (caracteristica != null && !termos(carro).contains(ListaInvertida.normalizar(caracteristica)))) {
+            throw new IOException("Posting incompatível com os dados; reconstrua os índices.");
         }
+        return carro;
+    }
+
+    List<Carro> buscar(Integer ano, String caracteristica) throws IOException {
+        List<Carro> resultado = new ArrayList<>();
+        for (ListaInvertida.Posting p : postings(ano, caracteristica)) resultado.add(lerPosting(p, ano, caracteristica));
         return resultado;
+    }
+
+    String informacoesListas() throws IOException {
+        try (ListaInvertida a = abrirLista(true); ListaInvertida c = abrirLista(false)) {
+            return "Lista Ano: termos=" + a.getQuantidadeTermos() + "; postings=" + a.getQuantidadePostings()
+                    + "; arquivo=" + Files.size(anos) + " bytes\nLista Características: termos="
+                    + c.getQuantidadeTermos() + "; postings=" + c.getQuantidadePostings()
+                    + "; arquivo=" + Files.size(caracteristicas) + " bytes";
+        }
     }
 
     String informacoesHash() throws IOException {
