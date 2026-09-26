@@ -54,7 +54,7 @@ public class Main {
                     case 7: listar(); break;
                     case 8: arquivo.imprimirEstruturaFisica(System.out); break;
                     case 9: menuIndices(); break;
-                    case 0: System.out.println("Encerrando TP1."); break;
+                    case 0: System.out.println("Encerrando."); break;
                     default: System.out.println("Opção inválida.");
                 }
             } catch (Exception e) {
@@ -65,7 +65,7 @@ public class Main {
     }
 
     private void imprimirMenu() {
-        System.out.println("========== TP1 AEDS III - GRUPO 15 ==========");
+        System.out.println("========== TP2 AEDS III - GRUPO 15 ==========");
         System.out.println("Tema: Carros");
         System.out.println("Integrantes: Gabriel Benicio Fonseca e Rhayner Martins");
         System.out.println("1 - Carregar base de dados");
