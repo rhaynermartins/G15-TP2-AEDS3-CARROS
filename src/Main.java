@@ -183,12 +183,21 @@ public class Main {
     private void menuIndices() throws IOException {
         int opcao;
         do {
-            System.out.println("========== ÍNDICES / TP2 — B+ ==========");
-            System.out.println("1 - Criar/reconstruir B+ a partir de dados.db");
+            System.out.println("========== ÍNDICES / TP2 ==========");
+            System.out.println("1 - Reconstruir B+ e demais índices já ativos a partir de dados.db");
             System.out.println("2 - Buscar ID pela B+ (leitura direta)");
             System.out.println("3 - Informações da B+");
             System.out.println("4 - Validar B+ e posições dos dados");
-            System.out.println("5 - Comparar leitura sequencial e B+");
+            System.out.println("5 - Comparar leitura sequencial, B+ e Hash (se ativo)");
+            System.out.println("6 - Ativar/reconstruir Hash e listas junto à B+");
+            System.out.println("7 - Buscar ID pelo Hash (leitura direta)");
+            System.out.println("8 - Informações do Hash");
+            System.out.println("9 - Validar Hash e posições dos dados");
+            System.out.println("10 - Buscar por ano");
+            System.out.println("11 - Buscar por característica");
+            System.out.println("12 - Buscar ano AND característica");
+            System.out.println("13 - Validar Lista Ano");
+            System.out.println("14 - Validar Lista Características");
             System.out.println("0 - Voltar");
             opcao = lerInt("Escolha: ", -1);
             switch (opcao) {
@@ -211,10 +220,39 @@ public class Main {
                     int repeticoes = lerInt("Repetições (1 a 1000): ", -1);
                     System.out.println(indices.compararBuscas(new int[]{id}, repeticoes));
                     break;
+                case 6:
+                    int ordemCompleta = lerInt("Ordem da B+ (3 a 4096): ", -1);
+                    long inicial = indices.fase2Ativa() ? indices.quantidadeInicial()
+                            : lerInt("Quantidade INICIAL da base (CSV oficial: 100000; não use ultimoId): ", -1);
+                    System.out.println("População inicial: " + inicial + ". Este valor será preservado nas reconstruções.");
+                    indices.reconstruirTodos(ordemCompleta, inicial);
+                    System.out.println("Quatro índices reconstruídos. " + indices.informacoesHash());
+                    break;
+                case 7:
+                    Carro peloHash = indices.buscarHash(lerInt("ID: ", -1));
+                    System.out.println(peloHash == null ? "Registro não encontrado." : peloHash);
+                    break;
+                case 8: System.out.println(indices.informacoesHash()); break;
+                case 9: System.out.println(indices.validarHash()); break;
+                case 10: exibirResultados(indices.buscarAno(lerAno("Ano: "))); break;
+                case 11:
+                    exibirResultados(indices.buscarCaracteristica(lerStringObrigatoria("Característica: ")));
+                    break;
+                case 12:
+                    int anoBusca = lerAno("Ano: ");
+                    exibirResultados(indices.buscarCombinada(anoBusca, lerStringObrigatoria("Característica: ")));
+                    break;
+                case 13: System.out.println(indices.validarListaAno()); break;
+                case 14: System.out.println(indices.validarListaCaracteristicas()); break;
                 case 0: break;
                 default: System.out.println("Opção inválida.");
             }
         } while (opcao != 0);
+    }
+
+    private void exibirResultados(List<Carro> resultado) {
+        for (Carro carro : resultado) System.out.println(carro);
+        System.out.println("Total encontrado: " + resultado.size());
     }
 
     private int lerInt(String msg, int padrao) {
