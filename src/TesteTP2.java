@@ -62,7 +62,8 @@ public class TesteTP2 {
             exigir(mesma == criado.posicao, "Update mesmo tamanho por " + metodo);
             dados.bloquear = false;
             global(g);
-            falha(() -> crud.excluir(r), "Seleção antiga após mutação");
+            CrudIndexado.RegistroLocalizado desatualizado = r;
+            falha(() -> crud.excluir(desatualizado), "Seleção antiga após mutação");
             r = selecionar(crud, metodo, criado.id, 2021, "automatic");
             novo = r.getCarro(); novo.setNome("nome-ampliado-para-realocar-a-versao"); novo.setCaracteristicas(List.of("gas", "manual", "sedan"));
             dados.bloquear = true;
@@ -128,7 +129,7 @@ public class TesteTP2 {
 
     private static void recarga(GerenciadorIndices g, Path pasta, Path db) throws Exception {
         Path csv = pasta.resolve("recarga.csv");
-        Files.writeString(csv, "id,codigo,nome,dataRegistro,caracteristicas,ano\n1,CAR000000001,recarga,2026-09-26,gas|automatic,2020\n");
+        Files.writeString(csv, "nome;caracteristicas;ano;dataRegistro\nrecarga;gas|automatic;2020;2026-09-26\n");
         g.executarAlteracaoSequencial(() -> new Importador().carregarBase(csv, db));
         global(g);
         exigir(g.buscarHash(1) != null && g.buscarHash(2) == null && g.quantidadeInicial() == 100, "Recarga substitui índices sem recalibrar Hash");
