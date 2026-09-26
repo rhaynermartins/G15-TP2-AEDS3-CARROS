@@ -3,6 +3,7 @@ package service;
 import dao.ArquivoSequencial;
 import index.bplus.ArvoreBPlus;
 import index.hash.HashEstendido;
+import index.lista.ListaInvertida;
 import model.Carro;
 
 import java.io.DataInputStream;
@@ -16,6 +17,8 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Arrays;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Coordena os índices com o formato do TP1. Uso por uma aplicação/escritor de cada vez.
  * O marcador persistente evita usar índices após uma operação interrompida.
@@ -45,8 +48,20 @@ public class GerenciadorIndices {
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) { return arvore.getOrdem(); }
     }
 
+    public int ordemConfigurada() throws IOException {
+        try { return ordem(); }
+        catch (IOException original) {
+            if (!Files.isRegularFile(marca)) throw original;
+            try (DataInputStream in = new DataInputStream(Files.newInputStream(marca))) {
+                int ordem = in.readInt();
+                ArvoreBPlus.validarOrdem(ordem);
+                return ordem;
+            }
+        }
+    }
+
     private IOException inconsistente() {
-        return new IOException("Índice ausente/desatualizado ou operação interrompida. Reconstrua os índices ativos.");
+        return new IOException("Índices inconsistentes. Reconstrua todos os índices.");
     }
 
     private String estadoDados() throws IOException {
@@ -124,6 +139,10 @@ public class GerenciadorIndices {
 
     public long quantidadeInicial() throws IOException { return secundarios.quantidadeInicial(); }
 
+    public void reconstruirTodos() throws IOException {
+        reconstruirTodos(ordemConfigurada(), quantidadeInicial());
+    }
+
     private void conferirFase2() throws IOException {
         conferir();
         if (!secundarios.ativo()) throw new IOException("Ative os índices da Fase 2 pela reconstrução completa.");
@@ -144,6 +163,28 @@ public class GerenciadorIndices {
     public String validarListaAno() throws IOException { conferirFase2(); return secundarios.validarLista(true); }
     public String validarListaCaracteristicas() throws IOException { conferirFase2(); return secundarios.validarLista(false); }
 
+    String estadoConsistente() throws IOException { conferirFase2(); return estadoDados(); }
+
+    long localizarPosicao(int id, boolean peloHash) throws IOException {
+        conferirFase2();
+        if (peloHash) {
+            try (HashEstendido hash = secundarios.abrirHash()) { return hash.buscar(id); }
+        }
+        try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) { return arvore.buscar(id); }
+    }
+
+    Carro lerDireto(long posicao, int id) throws IOException {
+        conferirFase2(); return dados.readAtPosition(posicao, id);
+    }
+
+    List<ListaInvertida.Posting> postings(Integer ano, String termo) throws IOException {
+        conferirFase2(); return secundarios.postings(ano, termo);
+    }
+
+    Carro lerPosting(ListaInvertida.Posting posting, Integer ano, String termo) throws IOException {
+        conferirFase2(); return secundarios.lerPosting(posting, ano, termo);
+    }
+
     public Carro buscar(int id) throws IOException {
         conferir();
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
@@ -153,15 +194,20 @@ public class GerenciadorIndices {
     }
 
     public int criar(Carro carro) throws IOException {
+        return criarComPosicao(carro).id;
+    }
+
+    public ArquivoSequencial.InfoRegistro criarComPosicao(Carro carro) throws IOException {
         conferir();
+        ArquivoSequencial.InfoRegistro registro;
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             marcar(arvore.getOrdem());
-            ArquivoSequencial.InfoRegistro registro = dados.createComPosicao(carro);
+            registro = dados.createComPosicao(carro);
             arvore.inserir(registro.id, registro.posicao);
             if (secundarios.ativo()) secundarios.inserir(carro, registro.posicao);
         }
         concluir();
-        return carro.getId();
+        return registro;
     }
 
     public boolean atualizar(Carro carro) throws IOException {
@@ -169,14 +215,24 @@ public class GerenciadorIndices {
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             long anterior = arvore.buscar(carro.getId());
             if (anterior == -1) return false;
+            atualizarNaPosicao(anterior, carro);
+            return true;
+        }
+    }
+
+    /** A posição já veio da estrutura escolhida; B+ participa apenas da manutenção. */
+    long atualizarNaPosicao(long anterior, Carro carro) throws IOException {
+        conferir();
+        long nova;
+        try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             Carro antigo = dados.readAtPosition(anterior, carro.getId());
             marcar(arvore.getOrdem());
-            long nova = dados.updateAtPosition(anterior, carro);
+            nova = dados.updateAtPosition(anterior, carro);
             if (!arvore.atualizarPosicao(carro.getId(), nova)) throw inconsistente();
             if (secundarios.ativo()) secundarios.atualizar(antigo, carro, nova);
         }
         concluir();
-        return true;
+        return nova;
     }
 
     public boolean excluir(int id) throws IOException {
@@ -184,6 +240,14 @@ public class GerenciadorIndices {
         try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             long posicao = arvore.buscar(id);
             if (posicao == -1) return false;
+            excluirNaPosicao(posicao, id);
+            return true;
+        }
+    }
+
+    void excluirNaPosicao(long posicao, int id) throws IOException {
+        conferir();
+        try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
             Carro antigo = dados.readAtPosition(posicao, id);
             marcar(arvore.getOrdem());
             dados.deleteAtPosition(posicao, id);
@@ -191,7 +255,6 @@ public class GerenciadorIndices {
             if (secundarios.ativo()) secundarios.remover(antigo);
         }
         concluir();
-        return true;
     }
 
     @FunctionalInterface
@@ -238,6 +301,51 @@ public class GerenciadorIndices {
             return "Ordem=" + arvore.getOrdem() + "; entradas=" + arvore.getQuantidade()
                     + "; página=" + arvore.getTamanhoPagina() + " bytes; arquivo=" + Files.size(indice) + " bytes";
         }
+    }
+
+    public String informacoesTodas() throws IOException {
+        conferirFase2();
+        try (ArvoreBPlus arvore = ArvoreBPlus.abrir(indice)) {
+            return arvore.validar(null) + "; ordem=" + arvore.getOrdem() + "; arquivo=" + Files.size(indice)
+                    + " bytes\n" + secundarios.informacoesHash() + "\n" + secundarios.informacoesListas();
+        }
+    }
+
+    private String validarDados() throws IOException {
+        if (!Files.isRegularFile(dados.getCaminho()) || Files.size(dados.getCaminho()) < 4) {
+            throw new IOException("Cabeçalho de dados ausente/incompleto.");
+        }
+        int ultimo = dados.getUltimoId();
+        if (ultimo < 0) throw new IOException("ultimoId negativo.");
+        Set<Integer> ids = new HashSet<>();
+        dados.percorrerAtivos((id, pos) -> {
+            if (id <= 0 || id > ultimo || !ids.add(id)) throw new IOException("ID ativo inválido/duplicado: " + id);
+        });
+        return "Arquivo de dados: OK; registros ativos=" + ids.size() + "; ultimoId=" + ultimo;
+    }
+
+    /** Diagnóstico independente por estrutura; não reconstrói nem oculta divergências. */
+    public String validarTodos() throws IOException {
+        StringBuilder resultado = new StringBuilder();
+        String[] nomes = {"Arquivo de dados", "B+", "Hash Estendido", "Lista Ano", "Lista Características"};
+        List<Operacao<String>> validacoes = Arrays.asList(this::validarDados, this::validar,
+                this::validarHash, this::validarListaAno, this::validarListaCaracteristicas);
+        boolean consistente = true;
+        for (int i = 0; i < validacoes.size(); i++) {
+            try { resultado.append(validacoes.get(i).executar()); }
+            catch (IOException | RuntimeException e) {
+                consistente = false;
+                resultado.append(nomes[i]).append(": ERRO — ").append(e.getMessage());
+            }
+            resultado.append('\n');
+        }
+        if (!consistente) {
+            int ordem = 0;
+            try { ordem = ordemConfigurada(); } catch (IOException | IllegalArgumentException ignorada) { /* Cabeçalho também pode estar danificado. */ }
+            marcar(ordem);
+            resultado.append("Índices inconsistentes. Reconstrua todos os índices.");
+        } else resultado.append("Validação global: OK");
+        return resultado.toString();
     }
 
     /** Medição simples da mesma sequência de consultas; não é benchmark científico. */
